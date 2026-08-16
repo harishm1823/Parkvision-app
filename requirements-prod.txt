@@ -1,0 +1,15 @@
+# Production requirements for ParkVision
+ultralytics==8.0.196
+opencv-python-headless==4.8.1.78  # Headless version for servers
+flask==3.0.0
+numpy==1.24.3
+pillow==10.1.0
+torch==2.1.0
+torchvision==0.16.0
+pyyaml==6.0.1
+
+# Production extras
+gunicorn==21.2.0  # WSGI server
+flask-cors==4.0.0  # CORS support for API
+python-dotenv==1.0.0  # Environment variables
+psutil==5.9.6  # System monitoring

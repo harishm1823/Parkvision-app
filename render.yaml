@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: parkvision-app
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: USE_GPU
+        value: false
+      - key: CONFIDENCE_THRESHOLD
+        value: 0.5
+      - key: PYTHONUNBUFFERED
+        value: 1
+    healthCheckPath: /api/health

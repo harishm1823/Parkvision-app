@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  parkvision:
+    build: .
+    container_name: parkvision
+    ports:
+      - "5000:5000"
+    devices:
+      - /dev/video0:/dev/video0  # Webcam access (Linux only)
+    volumes:
+      - ./models:/app/models
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - FLASK_ENV=production
+      - CAMERA_SOURCE=0
+      - MODEL_PATH=models/best.pt
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    networks:
+      - parkvision-network
+
+  # Optional: Add database service
+  # postgres:
+  #   image: postgres:13
+  #   container_name: parkvision-db
+  #   environment:
+  #     POSTGRES_DB: parkvision
+  #     POSTGRES_USER: parkvision
+  #     POSTGRES_PASSWORD: password
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #   networks:
+  #     - parkvision-network
+
+networks:
+  parkvision-network:
+    driver: bridge
+
+# volumes:
+#   postgres-data:

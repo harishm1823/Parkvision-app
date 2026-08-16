@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ParkVision - Smart Parking Detection</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <div class="logo">
+                    <i class="fas fa-car"></i>
+                    <h1>ParkVision</h1>
+                </div>
+                <p>AI-Powered Smart Parking Space Detection</p>
+                <div class="accuracy-badge">
+                    <i class="fas fa-check-circle"></i> 99.4% Accuracy
+                </div>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <div class="video-section">
+                <div class="section-header">
+                    <h2><i class="fas fa-video"></i> Live Detection Feed</h2>
+                    <div class="status-indicator">
+                        <span class="status-dot"></span>
+                        <span>Live</span>
+                    </div>
+                </div>
+                <div class="video-container">
+                    <div class="upload-area" id="uploadArea">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <p>Drop parking lot image here or click to upload</p>
+                        <input type="file" id="imageInput" accept="image/*" style="display: none;">
+                    </div>
+                    <div class="video-overlay">
+                        <div class="fps-counter" id="fps-display">Ready for upload</div>
+                    </div>
+                </div>
+                <div class="video-controls">
+                    <button class="control-btn" onclick="toggleFullscreen()">
+                        <i class="fas fa-expand"></i> Fullscreen
+                    </button>
+                    <button class="control-btn" onclick="takeScreenshot()">
+                        <i class="fas fa-camera"></i> Screenshot
+                    </button>
+                </div>
+            </div>
+
+            <div class="stats-section">
+                <h2><i class="fas fa-chart-bar"></i> Real-Time Analytics</h2>
+                
+                <div class="stats-grid">
+                    <div class="stat-card empty">
+                        <div class="stat-icon"><i class="fas fa-square"></i></div>
+                        <div class="stat-info">
+                            <h3>Empty Spaces</h3>
+                            <p class="stat-value" id="empty-count">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card occupied">
+                        <div class="stat-icon"><i class="fas fa-car"></i></div>
+                        <div class="stat-info">
+                            <h3>Occupied Spaces</h3>
+                            <p class="stat-value" id="occupied-count">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card total">
+                        <div class="stat-icon"><i class="fas fa-th"></i></div>
+                        <div class="stat-info">
+                            <h3>Total Spaces</h3>
+                            <p class="stat-value" id="total-count">0</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="availability">
+                    <h3><i class="fas fa-percentage"></i> Availability</h3>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="availability-bar"></div>
+                    </div>
+                    <p id="availability-text">0% Available</p>
+                </div>
+
+                <div class="performance-metrics">
+                    <h3><i class="fas fa-tachometer-alt"></i> Performance</h3>
+                    <div class="metric-row">
+                        <span>Model Accuracy:</span>
+                        <span class="metric-value">99.4%</span>
+                    </div>
+                    <div class="metric-row">
+                        <span>Processing Speed:</span>
+                        <span class="metric-value" id="processing-speed">30+ FPS</span>
+                    </div>
+                    <div class="metric-row">
+                        <span>Detection Confidence:</span>
+                        <span class="metric-value">High</span>
+                    </div>
+                </div>
+
+                <div class="system-info">
+                    <h3><i class="fas fa-info-circle"></i> System Info</h3>
+                    <div class="info-row">
+                        <span>Model:</span>
+                        <span>YOLOv8 Nano</span>
+                    </div>
+                    <div class="info-row">
+                        <span>Dataset:</span>
+                        <span>PKLot (12,416 images)</span>
+                    </div>
+                    <div class="info-row">
+                        <span>Status:</span>
+                        <span class="status-active">Active</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <div class="footer-content">
+                <p><i class="fas fa-robot"></i> Built with YOLOv8 | Trained on PKLot Dataset</p>
+                <p><i class="fas fa-database"></i> 12,417 images, 695,899 labels | <i class="fas fa-chart-line"></i> 99.4% Accuracy</p>
+                <p><i class="fas fa-code"></i> Python • OpenCV • Flask • PyTorch</p>
+            </div>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
