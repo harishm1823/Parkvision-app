@@ -27,6 +27,16 @@ app = Flask(__name__)
 app.config.from_object(get_config())
 CORS(app)
 
+# ---- Detection settings (tune these) ----
+MODEL_NAME = os.environ.get('YOLO_MODEL', 'yolov8m.pt')  # n < s < m < l < x (bigger = more accurate, slower)
+IMG_SIZE = 1280          # larger input helps small cars in aerial photos
+DETECT_CONF = 0.15       # model-level confidence threshold
+COUNT_CONF = 0.20        # minimum confidence to count a vehicle
+TILE_SIZE = int(os.environ.get('TILE_SIZE', 640))      # tile size in pixels for tiled detection
+TILE_OVERLAP = 0.25      # overlap between neighbouring tiles
+TILE_IMG_SIZE = 1024     # inference size per tile (upscales small cars)
+
+
 @app.before_request
 def check_api_key():
     # Let CORS preflight, the web page, static files and public routes through
@@ -46,6 +56,7 @@ def check_api_key():
 def index():
     """Main web interface"""
     return render_template('index.html')
+
 
 @app.route('/favicon.ico')
 def favicon():
@@ -98,7 +109,7 @@ def upload_image():
                 cls = int(box.cls[0])
 
                 # Only include vehicles
-                if cls in [2, 5, 7]:  # car, bus, truck
+                if cls in [2, 5, 7] and conf > COUNT_CONF:  # car, bus, truck (same rule as the count)
                     class_name = detector.class_names[cls] if cls < len(detector.class_names) else 'vehicle'
                     detections.append({
                         'bbox': [x1, y1, x2, y2],
@@ -107,6 +118,28 @@ def upload_image():
                         'class_id': cls
                     })
 
+        # Draw boxes on a copy of the image so the user can see what was detected
+        annotated = None
+        try:
+            vis = image.copy()
+            thickness = max(2, int(round(max(vis.shape[:2]) / 600)))
+            font_scale = max(0.4, thickness * 0.25)
+            for d in detections:
+                x1, y1, x2, y2 = d['bbox']
+                cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 200, 0), thickness)
+                label = f"{d['confidence']:.2f}"
+                cv2.putText(vis, label, (x1, max(12, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX,
+                            font_scale, (0, 255, 255), max(1, thickness - 1), cv2.LINE_AA)
+            vh, vw = vis.shape[:2]
+            if max(vh, vw) > 1280:
+                scale = 1280 / max(vh, vw)
+                vis = cv2.resize(vis, (int(vw * scale), int(vh * scale)))
+            ok, buf = cv2.imencode('.jpg', vis, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if ok:
+                annotated = 'data:image/jpeg;base64,' + base64.b64encode(buf).decode('utf-8')
+        except Exception as draw_error:
+            print(f"⚠️ Could not draw detections: {draw_error}")
+
         return jsonify({
             'success': True,
             'message': f'Detected {counts["total"]} objects',
@@ -114,6 +147,7 @@ def upload_image():
             'occupied': counts.get('occupied', 0),
             'total': counts['total'],
             'detections': detections,
+            'annotated_image': annotated,
             'filename': file.filename
         })
 
@@ -137,7 +171,6 @@ if cv2_available:
         import torch
 
         # Newer PyTorch (2.6+) needs safe globals; older versions don't have this API.
-        # Only call it when it exists so older torch doesn't crash into the fallback.
         if hasattr(torch.serialization, 'add_safe_globals'):
             try:
                 print("🔄 Setting up PyTorch safe globals...")
@@ -146,19 +179,83 @@ if cv2_available:
             except Exception as sg_error:
                 print(f"⚠️ Could not set safe globals: {sg_error}")
 
+        import numpy as np
+
+        class _Box:
+            """Minimal box object compatible with the rest of the code."""
+            def __init__(self, x1, y1, x2, y2, conf, cls):
+                self.xyxy = [[x1, y1, x2, y2]]
+                self.conf = [conf]
+                self.cls = [cls]
+
+        class _Results:
+            def __init__(self, boxes):
+                self.boxes = boxes
+
         class RealDetector:
             def __init__(self):
-                print("📥 Loading YOLOv8n model...")
-                self.model = YOLO('yolov8n.pt')
-                # COCO class names - car is 2, bus is 5, truck is 7
+                print(f"📥 Loading {MODEL_NAME}...")
+                self.model = YOLO(MODEL_NAME)
+                # COCO class ids: car is 2, bus is 5, truck is 7
                 self.vehicle_classes = [2, 5, 7]
                 self.class_names = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck']
                 print("🚗 Vehicle detection ready")
 
+            def _run(self, image, imgsz, offset=(0, 0)):
+                """Run YOLO on one image/tile and return boxes in full-image coordinates."""
+                out = []
+                res = self.model(image, conf=DETECT_CONF, imgsz=imgsz,
+                                 classes=self.vehicle_classes, verbose=False)
+                if not res or res[0].boxes is None:
+                    return out
+                ox, oy = offset
+                for b in res[0].boxes:
+                    x1, y1, x2, y2 = [float(v) for v in b.xyxy[0]]
+                    out.append((x1 + ox, y1 + oy, x2 + ox, y2 + oy,
+                                float(b.conf[0]), int(b.cls[0])))
+                return out
+
+            @staticmethod
+            def _merge(dets, thr=0.6):
+                """Greedy NMS using intersection over the smaller box (removes duplicates and cut-off halves)."""
+                dets = sorted(dets, key=lambda d: d[4], reverse=True)
+                kept = []
+                for d in dets:
+                    a_area = max(1.0, (d[2] - d[0]) * (d[3] - d[1]))
+                    dup = False
+                    for k in kept:
+                        ix1, iy1 = max(d[0], k[0]), max(d[1], k[1])
+                        ix2, iy2 = min(d[2], k[2]), min(d[3], k[3])
+                        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+                        k_area = max(1.0, (k[2] - k[0]) * (k[3] - k[1]))
+                        if inter / min(a_area, k_area) > thr:
+                            dup = True
+                            break
+                    if not dup:
+                        kept.append(d)
+                return kept
+
             def detect(self, image):
                 try:
-                    results = self.model(image, conf=0.25, verbose=False)
-                    return results[0] if results else None
+                    h, w = image.shape[:2]
+                    dets = self._run(image, IMG_SIZE)  # full-image pass
+
+                    # Tiled passes for large images (finds small cars)
+                    if max(h, w) > TILE_SIZE:
+                        stride = max(1, int(TILE_SIZE * (1 - TILE_OVERLAP)))
+                        ys = list(range(0, max(1, h - TILE_SIZE) + 1, stride))
+                        xs = list(range(0, max(1, w - TILE_SIZE) + 1, stride))
+                        if ys[-1] + TILE_SIZE < h:
+                            ys.append(h - TILE_SIZE if h > TILE_SIZE else 0)
+                        if xs[-1] + TILE_SIZE < w:
+                            xs.append(w - TILE_SIZE if w > TILE_SIZE else 0)
+                        for y in ys:
+                            for x in xs:
+                                tile = image[y:y + TILE_SIZE, x:x + TILE_SIZE]
+                                dets += self._run(tile, TILE_IMG_SIZE, offset=(x, y))
+
+                    merged = self._merge(dets)
+                    return _Results([_Box(*d) for d in merged])
                 except Exception as e:
                     print(f"Detection error: {e}")
                     return None
@@ -173,15 +270,16 @@ if cv2_available:
                     for box in results.boxes:
                         cls = int(box.cls[0])
                         conf = float(box.conf[0])
-                        if cls in self.vehicle_classes and conf > 0.3:
+                        if cls in self.vehicle_classes and conf > COUNT_CONF:
                             vehicle_count += 1
 
                     print(f"🔍 Detected {vehicle_count} vehicles out of {all_detections} total objects")
 
                     # Each vehicle represents an occupied parking space
                     counts['occupied'] = vehicle_count
-                    estimated_total = max(vehicle_count * 2, 8)  # At least 8 spaces
-                    counts['total'] = min(estimated_total, 20)   # Max 20 spaces
+                    # Estimated total spaces (never fewer than the vehicles found)
+                    estimated_total = max(vehicle_count * 2, 8)
+                    counts['total'] = max(min(estimated_total, 20), vehicle_count)
                     counts['empty'] = counts['total'] - counts['occupied']
                 else:
                     print("🔍 No vehicles detected - parking lot appears empty")
@@ -193,7 +291,7 @@ if cv2_available:
 
         detector = RealDetector()
         model_loaded = True
-        print("✅ Real YOLOv8n detector loaded successfully")
+        print("✅ Real YOLO detector loaded successfully")
 
     except Exception as e:
         print(f"⚠️ Failed to load YOLOv8: {e}")
@@ -229,7 +327,7 @@ else:
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
-    detector_type = "YOLOv8n Real Detector" if model_loaded else "No Detector"
+    detector_type = f"{MODEL_NAME} Real Detector" if model_loaded else "No Detector"
     return jsonify({
         'status': 'healthy' if model_loaded else 'model_error',
         'version': '1.0.0',

@@ -38,7 +38,7 @@ git push -u origin main
 
 ## Features
 
-- 🎯 99.06% detection accuracy
+- 🎯 99.04% detection accuracy
 - 🚀 Real-time processing
 - 🌐 Web dashboard
 - 📱 Mobile responsive

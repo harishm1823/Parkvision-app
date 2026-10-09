@@ -24,11 +24,11 @@ class ParkingDetector:
             print(f"✅ Loaded custom model: {model_path}")
         except Exception as e:
             print(f"⚠️ Failed to load custom model: {e}")
-            print("🔄 Falling back to YOLOv8n pretrained model...")
+            print("🔄 Falling back to YOLOv8m pretrained model...")
             # Fallback to pretrained model for cars
-            self.model = YOLO('yolov8n.pt')
+            self.model = YOLO('yolov8m.pt')
             self.class_names = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck']
-            print("✅ Loaded YOLOv8n pretrained model")
+            print("✅ Loaded YOLOv8m pretrained model")
         
     def detect(self, image):
         """

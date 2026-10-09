@@ -22,6 +22,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const file = e.target.files[0];
             if (file) {
                 uploadImage(file);
+                e.target.value = ''; // allow re-selecting the same file
             }
         });
     }
@@ -51,7 +52,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (fpsDisplay) {
             fpsDisplay.textContent = 'Analyzing image...';
         }
-        
+
         const formData = new FormData();
         formData.append('file', file);
 
@@ -62,21 +63,24 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
+                const empty = data.empty || 0;
+                const occupied = data.occupied || 0;
+                const total = data.total || 0;
+
                 // Update the counts in real-time
-                updateCounts(data.empty || 0, data.occupied || 0, data.total || 0);
-                
-                // Show detection summary
-                if (data.total > 0) {
-                    const availability = data.empty > 0 ? Math.round((data.empty / data.total) * 100) : 0;
-                    if (fpsDisplay) {
-                        fpsDisplay.textContent = `Found ${data.total} vehicles (${availability}% spaces available)`;
-                    }
-                } else {
-                    if (fpsDisplay) {
+                updateCounts(empty, occupied, total);
+
+                // Show the image with detection boxes
+                showResult(data.annotated_image);
+
+                // Show detection summary (vehicles = occupied spaces)
+                const availability = total > 0 ? Math.round((empty / total) * 100) : 0;
+                if (fpsDisplay) {
+                    if (occupied > 0) {
+                        fpsDisplay.textContent = `Found ${occupied} vehicle${occupied === 1 ? '' : 's'} (${availability}% spaces available)`;
+                    } else {
                         fpsDisplay.textContent = 'No vehicles detected - all spaces available';
                     }
-                    // If no vehicles detected, assume all spaces are empty
-                    updateCounts(10, 0, 10); // Mock some empty spaces
                 }
             } else {
                 if (fpsDisplay) {
@@ -93,25 +97,43 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    function showResult(src) {
+        if (!uploadArea || !src) return;
+        let img = document.getElementById('resultImage');
+        if (!img) {
+            img = document.createElement('img');
+            img.id = 'resultImage';
+            img.alt = 'Detection result';
+            img.title = 'Click to upload another image';
+            img.style.cssText = 'display:block;max-width:100%;max-height:600px;margin:0 auto;border-radius:8px;';
+            uploadArea.appendChild(img);
+        }
+        // Hide the upload prompt while the result is shown
+        Array.from(uploadArea.children).forEach(child => {
+            if (child !== img) child.style.display = 'none';
+        });
+        img.src = src;
+    }
+
     function updateCounts(empty, occupied, total) {
         // Update count displays
         const emptyEl = document.getElementById('empty-count');
         const occupiedEl = document.getElementById('occupied-count');
         const totalEl = document.getElementById('total-count');
-        
+
         if (emptyEl) emptyEl.textContent = empty;
         if (occupiedEl) occupiedEl.textContent = occupied;
         if (totalEl) totalEl.textContent = total;
-        
+
         // Calculate and update availability
         const availability = total > 0 ? Math.round((empty / total) * 100) : 0;
-        
+
         const availabilityBar = document.querySelector('.availability-fill');
         const availabilityText = document.getElementById('availability-text');
-        
+
         if (availabilityBar) {
             availabilityBar.style.width = availability + '%';
-            
+
             // Change color based on availability
             if (availability > 70) {
                 availabilityBar.style.backgroundColor = '#4CAF50'; // Green
@@ -121,7 +143,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 availabilityBar.style.backgroundColor = '#F44336'; // Red
             }
         }
-        
+
         if (availabilityText) {
             availabilityText.textContent = availability + '% Available';
         }
