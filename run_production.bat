@@ -38,4 +38,4 @@ echo Access at: http://localhost:5000
 echo Press Ctrl+C to stop
 echo =========================================
 
-python src\app.py
+python api.py
