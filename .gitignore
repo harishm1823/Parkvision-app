@@ -48,4 +48,5 @@ logs/
 *.temp
 
 # Large files (keep models)
-# models/*.pt (commented out to keep our trained model)
+# models/(commented out to keep our trained model)
+*.pt
