@@ -1,6 +1,6 @@
 # ParkVision - AI Parking Detection System
 
-🚗 **99.06% Accuracy** | Real-time parking space detection using YOLOv8
+🚗 **99.04% Accuracy** | Real-time parking space detection using YOLOv8
 
 ## Quick Deploy to Render (Free)
 
