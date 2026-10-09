@@ -49,5 +49,3 @@ logs/
 
 # Large files (keep models)
 # models/*.pt (commented out to keep our trained model)
-
-yolov8n.pt
