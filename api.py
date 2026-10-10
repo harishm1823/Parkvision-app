@@ -1,10 +1,16 @@
 """
 REST API for ParkVision
+Counts are measured from the uploaded image:
+  occupied = vehicles detected by YOLO
+  empty    = free slots found in the gaps between parked vehicles in the same row
+  total    = occupied + empty
+The terminal and the web page always show the same numbers.
 """
 from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 import os
 import base64
+from statistics import median
 
 # Try to import OpenCV with error handling
 try:
@@ -31,10 +37,15 @@ CORS(app)
 MODEL_NAME = os.environ.get('YOLO_MODEL', 'yolov8m.pt')  # n < s < m < l < x (bigger = more accurate, slower)
 IMG_SIZE = 1280          # larger input helps small cars in aerial photos
 DETECT_CONF = 0.15       # model-level confidence threshold
-COUNT_CONF = 0.20        # minimum confidence to count a vehicle
+COUNT_CONF = float(os.environ.get('COUNT_CONF', 0.20))  # minimum confidence to count a vehicle
 TILE_SIZE = int(os.environ.get('TILE_SIZE', 640))      # tile size in pixels for tiled detection
 TILE_OVERLAP = 0.25      # overlap between neighbouring tiles
 TILE_IMG_SIZE = 1024     # inference size per tile (upscales small cars)
+
+# ---- Empty-slot inference settings ----
+ROW_TOL = 0.6            # vehicles whose centres are within this x vehicle height share a row
+MIN_ROW_CARS = 3         # a row needs at least this many vehicles before gaps are trusted
+MAX_GAP_SLOTS = 4        # ignore gaps that would need more empty slots than this (likely a driving lane)
 
 
 @app.before_request
@@ -100,25 +111,28 @@ def upload_image():
         results = detector.detect(image)
         counts = detector.count_spaces(results)
 
-        # Get detection details
+        # Vehicle details (already filtered by COUNT_CONF inside detect)
         detections = []
-        if hasattr(results, 'boxes') and results.boxes is not None and len(results.boxes) > 0:
+        if results is not None and getattr(results, 'boxes', None):
             for box in results.boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 conf = float(box.conf[0])
                 cls = int(box.cls[0])
+                class_name = detector.class_names[cls] if cls < len(detector.class_names) else 'vehicle'
+                detections.append({
+                    'bbox': [x1, y1, x2, y2],
+                    'confidence': conf,
+                    'class': class_name,
+                    'class_id': cls
+                })
 
-                # Only include vehicles
-                if cls in [2, 5, 7] and conf > COUNT_CONF:  # car, bus, truck (same rule as the count)
-                    class_name = detector.class_names[cls] if cls < len(detector.class_names) else 'vehicle'
-                    detections.append({
-                        'bbox': [x1, y1, x2, y2],
-                        'confidence': conf,
-                        'class': class_name,
-                        'class_id': cls
-                    })
+        empty_slots = [[int(v) for v in s] for s in getattr(results, 'empty_slots', [])]
 
-        # Draw boxes on a copy of the image so the user can see what was detected
+        # One line in the terminal with exactly what the page will show
+        print(f"📊 Occupied: {counts['occupied']} | Empty: {counts['empty']} | "
+              f"Total: {counts['total']} | Boxes drawn: {len(detections)} vehicles + {len(empty_slots)} empty slots")
+
+        # Draw boxes on a copy of the image: green = vehicle, blue = empty slot
         annotated = None
         try:
             vis = image.copy()
@@ -130,6 +144,10 @@ def upload_image():
                 label = f"{d['confidence']:.2f}"
                 cv2.putText(vis, label, (x1, max(12, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX,
                             font_scale, (0, 255, 255), max(1, thickness - 1), cv2.LINE_AA)
+            for x1, y1, x2, y2 in empty_slots:
+                cv2.rectangle(vis, (x1, y1), (x2, y2), (255, 140, 0), thickness)
+                cv2.putText(vis, "empty", (x1, max(12, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX,
+                            font_scale, (255, 140, 0), max(1, thickness - 1), cv2.LINE_AA)
             vh, vw = vis.shape[:2]
             if max(vh, vw) > 1280:
                 scale = 1280 / max(vh, vw)
@@ -142,11 +160,12 @@ def upload_image():
 
         return jsonify({
             'success': True,
-            'message': f'Detected {counts["total"]} objects',
-            'empty': counts.get('empty', 0),
-            'occupied': counts.get('occupied', 0),
+            'message': f'Found {counts["occupied"]} vehicles and {counts["empty"]} empty spaces',
+            'empty': counts['empty'],
+            'occupied': counts['occupied'],
             'total': counts['total'],
             'detections': detections,
+            'empty_slots': empty_slots,
             'annotated_image': annotated,
             'filename': file.filename
         })
@@ -189,8 +208,9 @@ if cv2_available:
                 self.cls = [cls]
 
         class _Results:
-            def __init__(self, boxes):
+            def __init__(self, boxes, empty_slots=None):
                 self.boxes = boxes
+                self.empty_slots = empty_slots or []
 
         class RealDetector:
             def __init__(self):
@@ -235,6 +255,60 @@ if cv2_available:
                         kept.append(d)
                 return kept
 
+            @staticmethod
+            def _infer_empty_slots(dets):
+                """
+                Find empty parking slots from the picture itself.
+                Vehicles are grouped into rows. Inside a row, the typical spacing between
+                neighbouring vehicles gives the slot width, and every gap that is wide
+                enough for one or more extra slots is counted as empty slots.
+                Returns a list of (x1, y1, x2, y2) boxes.
+                """
+                empty = []
+                if len(dets) < MIN_ROW_CARS:
+                    return empty
+
+                med_w = median(d[2] - d[0] for d in dets)
+                med_h = median(d[3] - d[1] for d in dets)
+
+                # Group vehicles into rows by vertical centre
+                rows = []
+                for d in sorted(dets, key=lambda d: (d[1] + d[3]) / 2):
+                    cy = (d[1] + d[3]) / 2
+                    for r in rows:
+                        if abs(cy - r['cy']) < ROW_TOL * med_h:
+                            r['cars'].append(d)
+                            r['cy'] = sum((c[1] + c[3]) / 2 for c in r['cars']) / len(r['cars'])
+                            break
+                    else:
+                        rows.append({'cy': cy, 'cars': [d]})
+
+                for r in rows:
+                    cars = sorted(r['cars'], key=lambda d: (d[0] + d[2]) / 2)
+                    if len(cars) < MIN_ROW_CARS:
+                        continue  # too few vehicles to know where the slots are
+
+                    centers = [(d[0] + d[2]) / 2 for d in cars]
+                    gaps = [b - a for a, b in zip(centers, centers[1:])]
+
+                    # Slot pitch = typical distance between neighbouring parked vehicles
+                    near = [g for g in gaps if g < 1.6 * med_w]
+                    pitch = median(near) if near else med_w * 1.15
+                    pitch = max(pitch, med_w * 0.9)
+
+                    row_y1 = median(d[1] for d in cars)
+                    row_y2 = median(d[3] for d in cars)
+
+                    for i, g in enumerate(gaps):
+                        n = int(round(g / pitch)) - 1
+                        if n < 1 or n > MAX_GAP_SLOTS:
+                            continue
+                        for k in range(1, n + 1):
+                            cx = centers[i] + g * k / (n + 1)
+                            half = pitch * 0.4
+                            empty.append((cx - half, row_y1, cx + half, row_y2))
+                return empty
+
             def detect(self, image):
                 try:
                     h, w = image.shape[:2]
@@ -254,72 +328,32 @@ if cv2_available:
                                 tile = image[y:y + TILE_SIZE, x:x + TILE_SIZE]
                                 dets += self._run(tile, TILE_IMG_SIZE, offset=(x, y))
 
-                    merged = self._merge(dets)
-                    return _Results([_Box(*d) for d in merged])
+                    # Merge duplicates, then keep only the vehicles that will be counted AND drawn
+                    merged = [d for d in self._merge(dets) if d[4] > COUNT_CONF]
+                    empty_slots = self._infer_empty_slots(merged)
+                    return _Results([_Box(*d) for d in merged], empty_slots)
                 except Exception as e:
                     print(f"Detection error: {e}")
                     return None
 
             def count_spaces(self, results):
-                counts = {'empty': 0, 'occupied': 0, 'total': 0}
+                """occupied = vehicles found, empty = free slots found, total = both."""
+                if not results or not getattr(results, 'boxes', None):
+                    return {'empty': 0, 'occupied': 0, 'total': 0}
 
-                if results and hasattr(results, 'boxes') and results.boxes is not None and len(results.boxes) > 0:
-                    vehicle_count = 0
-                    all_detections = len(results.boxes)
-
-                    for box in results.boxes:
-                        cls = int(box.cls[0])
-                        conf = float(box.conf[0])
-                        if cls in self.vehicle_classes and conf > COUNT_CONF:
-                            vehicle_count += 1
-
-                    print(f"🔍 Detected {vehicle_count} vehicles out of {all_detections} total objects")
-
-                    # Each vehicle represents an occupied parking space
-                    counts['occupied'] = vehicle_count
-                    # Estimated total spaces (never fewer than the vehicles found)
-                    estimated_total = max(vehicle_count * 2, 8)
-                    counts['total'] = max(min(estimated_total, 20), vehicle_count)
-                    counts['empty'] = counts['total'] - counts['occupied']
-                else:
-                    print("🔍 No vehicles detected - parking lot appears empty")
-                    counts['empty'] = 12
-                    counts['occupied'] = 0
-                    counts['total'] = 12
-
-                return counts
+                occupied = sum(1 for b in results.boxes if int(b.cls[0]) in self.vehicle_classes)
+                empty = len(getattr(results, 'empty_slots', []))
+                return {'empty': empty, 'occupied': occupied, 'total': occupied + empty}
 
         detector = RealDetector()
         model_loaded = True
         print("✅ Real YOLO detector loaded successfully")
 
     except Exception as e:
-        print(f"⚠️ Failed to load YOLOv8: {e}")
-        print("🔄 Falling back to basic detection...")
-
-        class FallbackDetector:
-            def __init__(self):
-                self.class_names = ['vehicle']
-
-            def detect(self, image):
-                class SimpleResults:
-                    def __init__(self):
-                        self.boxes = []
-                return SimpleResults()
-
-            def count_spaces(self, results):
-                import random
-                occupied = random.randint(1, 8)
-                total = occupied + random.randint(2, 5)
-                return {
-                    'empty': total - occupied,
-                    'occupied': occupied,
-                    'total': total
-                }
-
-        detector = FallbackDetector()
-        model_loaded = True
-        print("✅ Fallback detector ready")
+        # No fake/random numbers: if the model fails, the app reports an error instead.
+        print(f"❌ Failed to load YOLO model: {e}")
+        detector = None
+        model_loaded = False
 else:
     print("❌ OpenCV not available")
 
@@ -380,14 +414,12 @@ def detect():
         results = detector.detect(image)
         counts = detector.count_spaces(results)
 
-        # Get detection details
         detections = []
-        if results is not None and getattr(results, 'boxes', None) is not None:
+        if results is not None and getattr(results, 'boxes', None):
             for box in results.boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 conf = float(box.conf[0])
                 cls = int(box.cls[0])
-
                 detections.append({
                     'bbox': [x1, y1, x2, y2],
                     'confidence': conf,
@@ -399,7 +431,8 @@ def detect():
             'empty': counts['empty'],
             'occupied': counts['occupied'],
             'total': counts['total'],
-            'detections': detections
+            'detections': detections,
+            'empty_slots': [[int(v) for v in s] for s in getattr(results, 'empty_slots', [])]
         })
 
     except Exception as e:
