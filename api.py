@@ -106,6 +106,13 @@ def upload_image():
 
         if image is None:
             return jsonify({'error': 'Invalid image format'}), 400
+            # Cap image size to keep memory low on small servers
+        max_side = int(os.environ.get('MAX_IMAGE_SIDE', 1280))
+        h0, w0 = image.shape[:2]
+        if max(h0, w0) > max_side:
+            s = max_side / max(h0, w0)
+            image = cv2.resize(image, (int(w0 * s), int(h0 * s)),
+                               interpolation=cv2.INTER_AREA)
 
         # Run detection
         results = detector.detect(image)
@@ -409,6 +416,14 @@ def detect():
 
         if image is None:
             return jsonify({'error': 'Invalid image'}), 400
+
+        # Cap image size to keep memory low on small servers
+        max_side = int(os.environ.get('MAX_IMAGE_SIDE', 1280))
+        h0, w0 = image.shape[:2]
+        if max(h0, w0) > max_side:
+            s = max_side / max(h0, w0)
+            image = cv2.resize(image, (int(w0 * s), int(h0 * s)),
+                               interpolation=cv2.INTER_AREA)
 
         # Run detection
         results = detector.detect(image)
