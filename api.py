@@ -34,7 +34,7 @@ app.config.from_object(get_config())
 CORS(app)
 
 # ---- Detection settings (tune these) ----
-MODEL_NAME = os.environ.get('YOLO_MODEL', 'yolov8m.pt')  # n < s < m < l < x (bigger = more accurate, slower)
+MODEL_NAME = os.environ.get('YOLO_MODEL', 'yolov8n.pt')  # n < s < m < l < x (bigger = more accurate, slower)
 IMG_SIZE = 1280          # larger input helps small cars in aerial photos
 DETECT_CONF = 0.15       # model-level confidence threshold
 COUNT_CONF = float(os.environ.get('COUNT_CONF', 0.20))  # minimum confidence to count a vehicle
