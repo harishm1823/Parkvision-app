@@ -27,6 +27,7 @@ COPY . .
 # Set environment variables
 ENV FLASK_ENV=production
 ENV PYTHONUNBUFFERED=1
+ENV PORT=5000
 
 # Run the application directly
-CMD gunicorn wsgi:app --bind 0.0.0.0:${PORT:-5000} --workers 1 --threads 1 --timeout 120
+CMD python api.py
